@@ -53,6 +53,13 @@ router.get("/", getChatsValidator, chatController.getChats);
 router.get("/:id", chatIdValidator, chatController.getChat);
 
 /**
+ * @route   POST /api/chats/:id/messages
+ * @desc    إرسال سؤال وأخذ رد قانوني من الـ RAG
+ * @access  Private
+ */
+router.post("/:id/messages", chatIdValidator, chatController.sendMessage);
+
+/**
  * @route   PUT /api/chats/:id
  * @desc    تحديث محادثة
  * @access  Private

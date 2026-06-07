@@ -4,6 +4,7 @@ import api from "./axios.js";
 // 💬 Chat API Functions
 // ═══════════════════════════════════════════════
 
+
 /**
  * إنشاء محادثة جديدة
  */
@@ -15,16 +16,29 @@ export const createChat = async (chatData = {}) => {
 /**
  * جلب كل محادثات المستخدم
  */
+/**
+ * جلب محادثة واحدة مع رسائلها
+ */
+export const getChat = async (chatId) => {
+  const response = await api.get(`/chats/${chatId}`);
+  return response.data;
+};
+
+
+/**
+ /**
+ * جلب كل محادثات المستخدم
+ */
 export const getChats = async (params = {}) => {
   const response = await api.get("/chats", { params });
   return response.data;
 };
 
 /**
- * جلب محادثة واحدة
+ * إرسال سؤال وأخذ رد قانوني من الـ RAG
  */
-export const getChat = async (chatId) => {
-  const response = await api.get(`/chats/${chatId}`);
+export const sendMessage = async (chatId, content) => {
+  const response = await api.post(`/chats/${chatId}/messages`, { content });
   return response.data;
 };
 
@@ -43,6 +57,7 @@ export const deleteChat = async (chatId) => {
   const response = await api.delete(`/chats/${chatId}`);
   return response.data;
 };
+
 
 /**
  * تثبيت/إلغاء تثبيت محادثة

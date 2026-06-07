@@ -1,4 +1,4 @@
-import crypto from "crypto";
+    import crypto from "crypto";
 import { validationResult } from "express-validator";
 
 import User from "../models/User.js";

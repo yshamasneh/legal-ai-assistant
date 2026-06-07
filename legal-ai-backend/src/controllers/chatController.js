@@ -1,10 +1,11 @@
 import { validationResult } from "express-validator";
-
+import Message from "../models/Message.js";
 import Chat from "../models/Chat.js";
 import User from "../models/User.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import logger from "../config/logger.js";
+import { askLegalQuestion, generateChatTitle } from "../services/ragService.js";
 
 // ═══════════════════════════════════════════════
 // 🔧 Helper: معالجة أخطاء Validator
@@ -35,6 +36,106 @@ const findChatAndCheckOwnership = async (chatId, userId) => {
 };
 
 // ═══════════════════════════════════════════════
+// 💬 SEND MESSAGE - إرسال سؤال وأخذ رد من الـ RAG
+// POST /api/chats/:id/messages
+// ═══════════════════════════════════════════════
+export const sendMessage = asyncHandler(async (req, res) => {
+  checkValidation(req);
+
+  // 1. نتأكد إن المحادثة موجودة وملك المستخدم
+  const chat = await findChatAndCheckOwnership(req.params.id, req.user._id);
+
+  const { content } = req.body;
+
+  // 2. نخزّن رسالة المستخدم
+  const userMessage = await Message.create({
+    chat: chat._id,
+    user: req.user._id,
+    role: "user",
+    content: content,
+    status: "sent",
+  });
+
+  // 3. نجيب آخر رسائل المحادثة (الذاكرة)
+  const previousMessages = await Message.find({ chat: chat._id })
+    .sort({ createdAt: -1 })
+    .limit(7)
+    .lean();
+
+  // نرتّبهم زمنياً (الأقدم أولاً) ونحوّلهم لصيغة الـ LLM
+  const history = previousMessages
+    .reverse()
+    .filter((m) => m._id.toString() !== userMessage._id.toString())
+    .map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content,
+    }));
+
+  // 4. ننادي الـ RAG مع الذاكرة
+  const ragResult = await askLegalQuestion(content, history);
+
+  // 5. نحوّل المواد القانونية لصيغة الموديل
+  const articles = (ragResult.topMatches || []).map((match) => ({
+    lawName: match.law || "",
+    articleNumber: match.article || "",
+    text: match.article_text || "",
+    relevanceScore: match.score || 0,
+  }));
+
+  // 6. نخزّن رد المساعد
+  const assistantMessage = await Message.create({
+    chat: chat._id,
+    user: req.user._id,
+    role: "assistant",
+    content: ragResult.answer,
+    status: ragResult.success ? "sent" : "failed",
+    aiMetadata: {
+      model: "none",
+      responseTime: ragResult.responseTime,
+    },
+    legalContext: {
+      articles: articles,
+      ragUsed: ragResult.success,
+    },
+  });
+
+  // 7. 🏷️ توليد عنوان ذكي (بعد أول إجابة فقط)
+  const messageCount = await Message.countDocuments({
+    chat: chat._id,
+    deletedAt: null,
+  });
+
+  // إذا كانت أول رسالتين (سؤال واحد + إجابة واحدة)، ولّد عنوان
+  if (messageCount === 2) {
+    try {
+      const smartTitle = await generateChatTitle(content, ragResult.answer);
+      chat.title = smartTitle;
+      logger.info(`🏷️ Generated smart title: ${smartTitle}`);
+    } catch (titleError) {
+      logger.error(`⚠️ Title generation failed: ${titleError.message}`);
+    }
+  }
+
+  // 8. نحدّث وقت آخر نشاط للمحادثة
+  chat.updatedAt = Date.now();
+  await chat.save();
+
+  logger.info(`💬 Message sent in chat ${chat._id} by ${req.user.email}`);
+
+  // 9. نرجّع الرسالتين للواجهة
+  res.status(201).json({
+    success: true,
+    message: "تم إرسال الرسالة بنجاح",
+    data: {
+      userMessage,
+      assistantMessage,
+      chatTitle: chat.title,
+      disclaimer: ragResult.disclaimer,
+    },
+  });
+});
+
+// ═══════════════════════════════════════════════
 // 📝 1. CREATE CHAT - إنشاء محادثة جديدة
 // POST /api/chats
 // ═══════════════════════════════════════════════
@@ -43,7 +144,6 @@ export const createChat = asyncHandler(async (req, res) => {
 
   const { title, category, tags, aiModel } = req.body;
 
-  // إنشاء المحادثة
   const chat = await Chat.create({
     user: req.user._id,
     title: title || "محادثة جديدة",
@@ -52,7 +152,6 @@ export const createChat = asyncHandler(async (req, res) => {
     aiModel: aiModel || "gpt-3.5-turbo",
   });
 
-  // تحديث عداد المحادثات للمستخدم
   await User.findByIdAndUpdate(req.user._id, {
     $inc: { totalChats: 1 },
   });
@@ -68,7 +167,6 @@ export const createChat = asyncHandler(async (req, res) => {
 
 // ═══════════════════════════════════════════════
 // 📋 2. GET ALL CHATS - جلب كل محادثات المستخدم
-// GET /api/chats?limit=50&skip=0&includeArchived=false&category=labor
 // ═══════════════════════════════════════════════
 export const getChats = asyncHandler(async (req, res) => {
   checkValidation(req);
@@ -80,7 +178,6 @@ export const getChats = asyncHandler(async (req, res) => {
     category,
   } = req.query;
 
-  // بناء الـ query
   const query = { user: req.user._id };
 
   if (includeArchived !== "true") {
@@ -91,13 +188,11 @@ export const getChats = asyncHandler(async (req, res) => {
     query.category = category;
   }
 
-  // جلب المحادثات
   const chats = await Chat.find(query)
     .sort({ isPinned: -1, updatedAt: -1 })
     .limit(parseInt(limit))
     .skip(parseInt(skip));
 
-  // العدد الإجمالي
   const total = await Chat.countDocuments(query);
 
   res.status(200).json({
@@ -115,23 +210,30 @@ export const getChats = asyncHandler(async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════
-// 🔍 3. GET SINGLE CHAT - جلب محادثة واحدة
-// GET /api/chats/:id
+// 🔍 3. GET SINGLE CHAT - جلب محادثة واحدة مع رسائلها
 // ═══════════════════════════════════════════════
 export const getChat = asyncHandler(async (req, res) => {
   checkValidation(req);
 
   const chat = await findChatAndCheckOwnership(req.params.id, req.user._id);
 
+  const messages = await Message.find({ chat: chat._id })
+    .sort({ createdAt: 1 })
+    .lean();
+
   res.status(200).json({
     success: true,
-    data: { chat },
+    data: {
+      chat: {
+        ...chat.toObject(),
+        messages,
+      },
+    },
   });
 });
 
 // ═══════════════════════════════════════════════
 // ✏️ 4. UPDATE CHAT - تحديث محادثة
-// PUT /api/chats/:id
 // ═══════════════════════════════════════════════
 export const updateChat = asyncHandler(async (req, res) => {
   checkValidation(req);
@@ -140,7 +242,6 @@ export const updateChat = asyncHandler(async (req, res) => {
 
   const { title, category, tags, aiModel } = req.body;
 
-  // تحديث الحقول المسموح بها
   if (title !== undefined) chat.title = title;
   if (category !== undefined) chat.category = category;
   if (tags !== undefined) chat.tags = tags;
@@ -159,7 +260,6 @@ export const updateChat = asyncHandler(async (req, res) => {
 
 // ═══════════════════════════════════════════════
 // 🗑️ 5. DELETE CHAT - حذف محادثة (soft delete)
-// DELETE /api/chats/:id
 // ═══════════════════════════════════════════════
 export const deleteChat = asyncHandler(async (req, res) => {
   checkValidation(req);
@@ -168,7 +268,6 @@ export const deleteChat = asyncHandler(async (req, res) => {
 
   await chat.softDelete();
 
-  // تحديث عداد المحادثات للمستخدم
   await User.findByIdAndUpdate(req.user._id, {
     $inc: { totalChats: -1 },
   });
@@ -182,8 +281,7 @@ export const deleteChat = asyncHandler(async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════
-// 📌 6. TOGGLE PIN - تثبيت/إلغاء تثبيت
-// PATCH /api/chats/:id/pin
+// 📌 6. TOGGLE PIN
 // ═══════════════════════════════════════════════
 export const togglePin = asyncHandler(async (req, res) => {
   checkValidation(req);
@@ -210,8 +308,7 @@ export const togglePin = asyncHandler(async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════
-// 📦 7. TOGGLE ARCHIVE - أرشفة/إلغاء أرشفة
-// PATCH /api/chats/:id/archive
+// 📦 7. TOGGLE ARCHIVE
 // ═══════════════════════════════════════════════
 export const toggleArchive = asyncHandler(async (req, res) => {
   checkValidation(req);
@@ -238,8 +335,7 @@ export const toggleArchive = asyncHandler(async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════
-// 📊 8. GET STATS - إحصائيات المحادثات
-// GET /api/chats/stats
+// 📊 8. GET STATS
 // ═══════════════════════════════════════════════
 export const getStats = asyncHandler(async (req, res) => {
   const stats = await Chat.getUserStats(req.user._id);

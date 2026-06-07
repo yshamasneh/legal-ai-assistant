@@ -1,24 +1,24 @@
 import { useEffect, useRef } from "react";
 import ChatMessage from "./ChatMessage.jsx";
+import { useTheme } from "../context/ThemeContext.jsx";
 
 function ChatArea({ messages, isTyping }) {
   const messagesEndRef = useRef(null);
+  const { isDark } = useTheme();
 
-  // Auto-scroll لآخر رسالة
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  // إذا ما في رسائل، اعرض شاشة الترحيب
   if (messages.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center p-6">
+      <div className={`flex-1 flex items-center justify-center p-6 ${isDark ? "bg-transparent" : "bg-slate-50"}`}>
         <div className="text-center max-w-md">
           <div className="text-6xl mb-4">⚖️</div>
-          <h2 className="text-2xl font-bold text-gray-800 mb-2">
+          <h2 className={`text-2xl font-bold mb-2 ${isDark ? "text-slate-100" : "text-slate-800"}`}>
             مرحباً بك في المساعد القانوني
           </h2>
-          <p className="text-gray-500">
+          <p className={isDark ? "text-slate-400" : "text-slate-500"}>
             اسأل أي سؤال قانوني وسأحاول مساعدتك
           </p>
         </div>
@@ -26,29 +26,22 @@ function ChatArea({ messages, isTyping }) {
     );
   }
 
-  // عرض الرسائل
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-4">
+    <div className={`flex-1 overflow-y-auto p-6 space-y-4 ${isDark ? "bg-transparent" : "bg-slate-50"}`}>
       {messages.map((msg) => (
         <ChatMessage key={msg.id} role={msg.role} text={msg.text} />
       ))}
 
-      {/* مؤشر "جاري الكتابة" */}
       {isTyping && (
-        <div className="flex items-center gap-2 text-gray-500 px-4">
+        <div className={`flex items-center gap-2 px-4 ${isDark ? "text-slate-400" : "text-slate-500"}`}>
           <div className="flex gap-1">
-            <div
-              className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-              style={{ animationDelay: "0ms" }}
-            ></div>
-            <div
-              className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-              style={{ animationDelay: "150ms" }}
-            ></div>
-            <div
-              className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-              style={{ animationDelay: "300ms" }}
-            ></div>
+            {[0, 150, 300].map((delay) => (
+              <div
+                key={delay}
+                className={`w-2 h-2 rounded-full animate-bounce ${isDark ? "bg-slate-400" : "bg-slate-400"}`}
+                style={{ animationDelay: `${delay}ms` }}
+              />
+            ))}
           </div>
           <span className="text-sm">جاري الكتابة...</span>
         </div>

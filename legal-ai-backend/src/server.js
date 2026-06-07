@@ -14,6 +14,7 @@ import errorHandler from "./middleware/errorHandler.js";
 import notFound from "./middleware/notFound.js";
 import authRoutes from "./routes/authRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js"; 
 
 // ═══════════════════════════════════════════════
 // 1️⃣ تحميل المتغيرات من .env
@@ -156,7 +157,7 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 // Chat Routes
 app.use("/api/chats", chatRoutes);
-
+app.use("/api/admin", adminRoutes);
 
 
 // app.use("/api/auth", authRoutes);
